@@ -1,0 +1,47 @@
+
+
+
+temperature 0.5
+
+gammaDPD 10.0
+
+intensityDPD 25.0
+
+
+numberParticlesDPD  80000 131072
+
+boxSize 40 40 90
+
+topWall_z 85
+
+cutOffWall_fluid    2.5
+
+
+cutOffDPD           3.0
+
+
+wallCoordinatesFile  wall.init
+
+wallBondsFile        wall.bonds
+
+wallBondsFileFP      wall.bondsFP
+
+wallParticleMass        3
+
+wallOscilationAmplitude 2000
+wallOscilationWaveNumber 0.05
+
+
+relaxSteps 1000
+
+numberSteps 50000
+
+printSteps  100
+
+
+dt 0.01
+
+
+outputName kk
+
+nbinsHisto 50
