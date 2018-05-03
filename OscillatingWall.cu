@@ -36,6 +36,7 @@ The wall will start to oscilate only after the relaxation steps.
 #include"utils/InputFile.h"
 #include<fstream>
 
+double epsilonWall = 5.0;
 
 using namespace uammd;
 //This external force takes care of making the wall oscilate
@@ -117,7 +118,7 @@ public:
       //Each Potential describes the pair interactions with certain parameters.
       //The needed ones are in InputPairParameters inside each potential, in this case:
       Potential::LJ::InputPairParameters par;
-      par.epsilon = 5.0;
+      par.epsilon = epsilonWall;
       par.shift = false;
 
       par.sigma = 1;
@@ -530,5 +531,6 @@ void readParameters(std::string datamain, shared_ptr<System> sys){
   in.getOption("wallCoordinatesFile",InputFile::Required)>>wallCoordinatesFile;
   in.getOption("wallOscilationAmplitude",InputFile::Required)>>wallOscilationAmplitude;
   in.getOption("wallOscilationWaveNumber",InputFile::Required)>>wallOscilationWaveNumber;
+  in.getOption("epsilonWall",InputFile::Required)>>epsilonWall;
   in.getOption("nbinsHisto", InputFile::Optional)>>nbinsHisto;
 }
