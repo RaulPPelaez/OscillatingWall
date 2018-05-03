@@ -8,7 +8,7 @@ FILE=OscillatingWall.cu
 CPU= -O3 -funroll-loops -ffinite-math-only -fno-signaling-nans -fno-math-errno -fno-signed-zeros -frename-registers -march=native -fPIC
 
 DEBUG= -O3
-LOG_LEVEL=7
+LOG_LEVEL=5
 
 #DOUBLE_PRECISION=-DDOUBLE_PRECISION
 CUDA_VER=9.1

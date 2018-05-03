@@ -43,7 +43,7 @@ struct WallOscilation: public ParameterUpdatable{
   real w;
   real A;
   real t;
-
+  real relaxTime = -1;
   WallOscilation(real w, real A):w(w),A(A){t=0;}
   __device__ real3 force(const real4 &pos){    
     real3 f = make_real3(A*sinf(w*t),0, 0);
@@ -53,7 +53,11 @@ struct WallOscilation: public ParameterUpdatable{
     auto pos = pd->getPos(access::location::gpu, access::mode::read);
     return std::make_tuple(pos.raw());
   }
-  void updateSimulationTime(real time){ t=time;}
+  
+  void updateSimulationTime(real time){
+    if(relaxTime<0) relaxTime = time;
+      t=time-relaxTime;
+  }
     
 };
 
@@ -241,6 +245,8 @@ int main(int argc, char *argv[]){
 
   real wallWidth;
   Box box(boxSize);//({40, 40, 90});
+  real densityDPD = numberParticlesDPD/box.getVolume();
+
   real max_z = topWall_z-boxSize.z/2;//box.boxSize.z/2-2*cutOff;
   real min_z;
   real zOffsetFixedPoint; //Needed due to the wall being moved to the bottom of the box
@@ -280,7 +286,8 @@ int main(int argc, char *argv[]){
     min_z += pow(2, 1/6.);
 
     zOffsetFixedPoint = -mean_wall_z -box.boxSize.z*0.5 + wallWidth;
-    //Start in a random configuration    
+    //Start in a random configuration
+    real3 vcm = make_real3(0);
     fori(numberParticlesWall, numberParticlesWall + numberParticlesDPD){
       pos.raw()[i] = make_real4(
 				sys->rng().uniform3(-box.boxSize.x*0.5,
@@ -294,10 +301,15 @@ int main(int argc, char *argv[]){
       vel.raw()[i] = make_real3(sys->rng().gaussian(0, 0.01),
 				sys->rng().gaussian(0, 0.01),
 				sys->rng().gaussian(0, 0.01));
-      
+
+      vcm += vel.raw()[i];
       mass.raw()[i] = 1;
     }
-    
+    //Remove center of mass velocity
+    vcm /= (real) numberParticlesDPD;
+    fori(numberParticlesWall, numberParticlesWall + numberParticlesDPD){
+      vel.raw()[i] -= vcm;
+    }
   }
 
   auto all_group = make_shared<ParticleGroup>(pd, sys, "All");
@@ -312,7 +324,7 @@ int main(int argc, char *argv[]){
   par.initVelocities = false;
 
   auto verlet = make_shared<NVE>(pd, all_group, sys, par);
-  
+  real viscosityDPD;
   {//DPD
     using PairForces = PairForces<Potential::DPD>;
   
@@ -321,9 +333,19 @@ int main(int argc, char *argv[]){
     dpd_params.cutOff = cutOffDPD;
     dpd_params.temperature = temperature;
     dpd_params.gamma = gammaDPD;
-    dpd_params.A = intensityDPD;
+
+    
+    if(intensityDPD < 0) //This gives compresibility of water  1/k ~ 16
+      dpd_params.A = 75.0*temperature/(pow(cutOffDPD, 4)*densityDPD);
+    else
+      dpd_params.A = intensityDPD;
     dpd_params.dt = par.dt;
-  
+    
+    sys->log<System::MESSAGE>("DPD density: %f", densityDPD);
+    viscosityDPD = 45.0/(4.0*M_PI)*temperature/(gammaDPD*pow(cutOffDPD,3)) +
+      (2.0*M_PI)/(1575.0)*pow(densityDPD,2)*gammaDPD*pow(cutOffDPD,5);
+    sys->log<System::MESSAGE>("DPD viscosity: %f", viscosityDPD);
+    
     auto pot = make_shared<Potential::DPD>(sys, dpd_params);
 
     PairForces::Parameters params;
@@ -363,6 +385,11 @@ int main(int argc, char *argv[]){
   }
 
 
+  real wallDensity = numberParticlesWall*wallParticleMass/(box.boxSize.y*box.boxSize.z);
+  sys->log<System::MESSAGE>("C: %f", viscosityDPD*densityDPD/(2*M_PI*wallOscilationWaveNumber*pow(wallDensity,2)));
+  sys->log<System::MESSAGE>("Penetration length: %f", sqrt(2*viscosityDPD/(2*M_PI*wallOscilationWaveNumber*densityDPD)));
+							      
+
   sys->log<System::MESSAGE>("RUNNING!!!");
 
   pd->sortParticles();
@@ -393,13 +420,13 @@ int main(int argc, char *argv[]){
   }
   
   cudaDeviceSynchronize();
-  {//Wall Oscilation
-    real A = wallOscilationAmplitude;
-    real w = 2*M_PI*wallOscilationWaveNumber;
-    auto wallOscilation = make_shared<ExternalForces<WallOscilation>>(pd, Wall_group, sys,
-								      make_shared<WallOscilation>(w,A));
-    verlet->addInteractor(wallOscilation);
-  }
+  //Wall Oscilation
+  real A = wallOscilationAmplitude;
+  real w = 2*M_PI*wallOscilationWaveNumber;
+  auto wallOscilation = make_shared<ExternalForces<WallOscilation>>(pd, Wall_group, sys,
+								    make_shared<WallOscilation>(w,A));
+  verlet->addInteractor(wallOscilation);
+  
 
   //Run the simulation
   forj(0,numberSteps){
@@ -437,6 +464,7 @@ int main(int argc, char *argv[]){
 	real4 pc = pos.raw()[sortedIndex[i]];
 	real3 v = vel.raw()[sortedIndex[i]];
 	p = make_real3(pc); //box.apply_pbc(make_real3(pc));
+	auto p_pbc = box.apply_pbc(make_real3(pc));
 	int type = pc.w;
 	float radius=0.5;
 	if(type==0){ radius = 0.2; type=5;}
@@ -444,15 +472,22 @@ int main(int argc, char *argv[]){
 	posOut<<p<<" "<<radius<<" "<<type<<"\n";
 	velOut<<v<<"\n";
 
-	real z = pc.z;
+	real z = p_pbc.z;
 
 	int bin = int(((z+boxSize.z*0.5)/boxSize.z)*nbins+0.5);
 	counter[bin]++;
 	histogram[bin] += v.x;
       }
-      histoOut<<"#"<<endl;
+      histoOut<<""<<endl;
       fori(0, nbins){
-	histoOut<<(boxSize.z*(i/(double)nbins))<<" "<<histogram[i]/counter[i]<<"\n";
+	real time = j*dt;
+	real z = (boxSize.z*(i/(double)nbins));
+	real kvis = viscosityDPD/(densityDPD);
+	real kappa = sqrt(2*M_PI*wallOscilationWaveNumber/(2*kvis));
+	//std::cerr<<2*M_PI/kappa<<std::endl;
+	real theo = 5*exp(-z*kappa)*cos(2*M_PI*wallOscilationWaveNumber*time- kappa*z);
+	if(counter[i] > 0)
+	  histoOut<<z<<" "<<histogram[i]/counter[i]<<" "<<theo<<"\n";
       }
       posOut<<flush;
       velOut<<flush;

@@ -3,16 +3,19 @@
 
 temperature 0.5
 
-gammaDPD 10.0
+#gammaDPD 10.0
+gammaDPD 5.0
 
-intensityDPD 25.0
+#intensityDPD 25.0
+intensityDPD -1
 
 
-numberParticlesDPD  80000 131072
 
-boxSize 40 40 90
+numberParticlesDPD  50000 131072
 
-topWall_z 85
+boxSize 40 40 60
+
+topWall_z 55
 
 cutOffWall_fluid    2.5
 
@@ -26,22 +29,22 @@ wallBondsFile        wall.bonds
 
 wallBondsFileFP      wall.bondsFP
 
-wallParticleMass        3
+wallParticleMass        50
 
 wallOscilationAmplitude 2000
 wallOscilationWaveNumber 0.05
 
 
-relaxSteps 1000
+relaxSteps 500
 
 numberSteps 50000
 
-printSteps  100
+printSteps  200
 
 
-dt 0.01
+dt 0.005
 
 
 outputName kk
 
-nbinsHisto 50
+nbinsHisto 75
