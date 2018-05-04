@@ -386,7 +386,7 @@ int main(int argc, char *argv[]){
   }
 
 
-  real wallDensity = numberParticlesWall*wallParticleMass/(box.boxSize.y*box.boxSize.z);
+  real wallDensity = numberParticlesWall*wallParticleMass/(box.boxSize.y*box.boxSize.x);
   sys->log<System::MESSAGE>("C: %f", viscosityDPD*densityDPD/(2*M_PI*wallOscilationWaveNumber*pow(wallDensity,2)));
   sys->log<System::MESSAGE>("Penetration length: %f", sqrt(2*viscosityDPD/(2*M_PI*wallOscilationWaveNumber*densityDPD)));
 							      
