@@ -189,6 +189,18 @@ public:
 
 };
 
+
+//DPD dissipation between wall and fluid particles
+struct WallDissipation{
+  real gammaDPD, gammaWall_Fluid;
+  inline __device__ real dissipativeStrength(int i, int j, const real4 &pi, const real4 &pj, ...) const{
+    
+    bool sameType = int(pi.w)==int(pj.w);
+    bool wallwall = int(pi.w)==1;
+    return (gammaDPD*sameType + gammaWall_Fluid*(!sameType))*(!wallwall);
+  }
+};
+
 //Same as Harmonic, but the z position is shifted. This is used for the wall fixed bonds, allowing to displace the wall in the z direction.
 struct HarmonicZ: public BondedType::Harmonic{
   real offset;
@@ -206,7 +218,7 @@ int numberParticlesDPD;
 real cutOffWall_fluid;  //cut off between particles in the wall and the fluid (also wall-wall)
 real cutOffDPD;         //cut off between fluid particles
 real temperature;
-real gammaDPD;
+real gammaDPD, gammaWall_Fluid;
 real intensityDPD;
 
 real3 boxSize;
@@ -231,7 +243,7 @@ void readParameters(std::string datamain, shared_ptr<System> sys);
 
 int main(int argc, char *argv[]){
   auto sys = make_shared<System>(argc, argv);
-  readParameters("data.main", sys);
+  readParameters("data.main.dpd", sys);
   
   int numberParticlesWall;
   ifstream inWall(wallCoordinatesFile);
@@ -327,13 +339,17 @@ int main(int argc, char *argv[]){
   auto verlet = make_shared<NVE>(pd, all_group, sys, par);
   real viscosityDPD;
   {//DPD
-    using PairForces = PairForces<Potential::DPD>;
+    using DPD = Potential::DPD_impl<WallDissipation>;
+    using PairForces = PairForces<DPD>;
   
     //This is the general interface for setting up a potential  
-    Potential::DPD::Parameters dpd_params;
+    DPD::Parameters dpd_params;
     dpd_params.cutOff = cutOffDPD;
     dpd_params.temperature = temperature;
-    dpd_params.gamma = gammaDPD;
+    WallDissipation gamma;
+    gamma.gammaDPD = gammaDPD;
+    gamma.gammaWall_Fluid = gammaWall_Fluid;
+    dpd_params.gamma = gamma;
 
     
     if(intensityDPD < 0) //This gives compresibility of water  1/k ~ 16
@@ -347,11 +363,11 @@ int main(int argc, char *argv[]){
       (2.0*M_PI)/(1575.0)*pow(densityDPD,2)*gammaDPD*pow(cutOffDPD,5);
     sys->log<System::MESSAGE>("DPD viscosity: %f", viscosityDPD);
     
-    auto pot = make_shared<Potential::DPD>(sys, dpd_params);
+    auto pot = make_shared<DPD>(sys, dpd_params);
 
     PairForces::Parameters params;
     params.box = box;  //Box to work on
-    auto pairforces = make_shared<PairForces>(pd, DPD_group, sys, params, pot);
+    auto pairforces = make_shared<PairForces>(pd, all_group, sys, params, pot);
 
     verlet->addInteractor(pairforces);
   }
@@ -514,6 +530,7 @@ void readParameters(std::string datamain, shared_ptr<System> sys){
   InputFile in(datamain, sys);
   in.getOption("temperature",       InputFile::Required)>>temperature;
   in.getOption("gammaDPD",          InputFile::Required)>>gammaDPD;
+  in.getOption("gammaWall_Fluid",   InputFile::Required)>>gammaWall_Fluid;
   in.getOption("intensityDPD",      InputFile::Required)>>intensityDPD;
   in.getOption("numberParticlesDPD",InputFile::Required)>>numberParticlesDPD;
   in.getOption("boxSize",           InputFile::Required)>>boxSize.x>>boxSize.y>>boxSize.z;

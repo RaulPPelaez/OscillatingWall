@@ -1,0 +1,58 @@
+
+temperature 1.0
+
+#Dissipation between DPD particles
+gammaDPD 10
+#Dissipation between wall and DPD particles
+gammaWall_Fluid 100
+
+#Strength of the conservative DPD force (aij), negative means set aij to get the compressibility of water (kappa ~ 16)
+#intensityDPD 25.0
+intensityDPD -1
+
+#Number of fluid particles
+numberParticlesDPD  90000
+
+boxSize 40 40 55
+
+#Height of the top wall, from 0 to Lz
+topWall_z 50
+
+#Cut off between wall-wall and wall-fluid LJ interaction
+cutOffWall_fluid    2.5
+
+#cutOffDPD           1.12246204830937
+cutOffDPD           2
+
+
+#Files to read wall 
+wallCoordinatesFile  wall.init
+#p-p bonds
+wallBondsFile        wall.bonds
+#Bonds fixing to a certain height
+wallBondsFileFP      wall.bondsFP
+#Mass of a wall particle
+wallParticleMass       100
+
+#External force on the wall = A*sin(2*pi*w*t)
+#A
+wallOscilationAmplitude 10000
+#w
+wallOscilationWaveNumber 0.0075
+
+#LJ epsilon
+epsilonWall 2
+
+#During the relaxation the wall does not oscilate
+relaxSteps 1000
+
+numberSteps 20000000
+
+printSteps  1000
+
+dt 0.005
+
+outputName test
+
+#Number of bins for the velocity profile histogram
+nbinsHisto 50

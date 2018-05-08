@@ -1,5 +1,5 @@
 /*Raul P. Pelaez 2018. 
-An oscillating wall in a DPD fluid.
+An oscillating wall in a LJ fluid.
 
 The wall is located at the bottom of the box, covering it entirely. The system is periodic in XY, but DPD particles are confined to move inside a certain range in the Z direction (from the top of the wall to a threshold below the top of the box).
 
@@ -37,6 +37,7 @@ The wall will start to oscilate only after the relaxation steps.
 #include<fstream>
 
 double epsilonWall = 5.0;
+double epsilonFluid = 1.0;
 
 using namespace uammd;
 //This external force takes care of making the wall oscilate
@@ -86,16 +87,14 @@ struct HarmonicZ: public BondedType::Harmonic{
 using namespace std;
 
 //Parameters
-int numberParticlesDPD;
-real cutOffWall_fluid;  //cut off between particles in the wall and the fluid (also wall-wall)
-real cutOffDPD;         //cut off between fluid particles
+int numberFluidParticles;
+real cutOff;             //wall-wall, fluid-fluid cutoff
+real cutOffWall_fluid;  //cut off between particles in the wall and the fluid
 real temperature;
-real gammaDPD;
-real intensityDPD;
-
 real3 boxSize;
 real topWall_z;         //From 0 to Lz, Particles wont be allowed above this height
 
+real gammaVerlet; //VerletNVT viscosity (dissipation rate)
 real wallParticleMass;
 
 real wallOscilationAmplitude;
@@ -115,13 +114,13 @@ void readParameters(std::string datamain, shared_ptr<System> sys);
 
 int main(int argc, char *argv[]){
   auto sys = make_shared<System>(argc, argv);
-  readParameters("data.main", sys);
+  readParameters("data.main.md", sys);
   
   int numberParticlesWall;
   ifstream inWall(wallCoordinatesFile);
   inWall>>numberParticlesWall;
 
-  int N = numberParticlesDPD + numberParticlesWall;  
+  int N = numberFluidParticles + numberParticlesWall;  
   
   ullint seed = 0xf31337Bada55D00dULL^time(NULL);
   sys->rng().setSeed(seed);
@@ -130,7 +129,7 @@ int main(int argc, char *argv[]){
 
   real wallWidth;
   Box box(boxSize);//({40, 40, 90});
-  real densityDPD = numberParticlesDPD/box.getVolume();
+  real fluidDensity = numberFluidParticles/box.getVolume();
 
   real max_z = topWall_z-boxSize.z/2;//box.boxSize.z/2-2*cutOff;
   real min_z;
@@ -173,8 +172,8 @@ int main(int argc, char *argv[]){
     zOffsetFixedPoint = -mean_wall_z -box.boxSize.z*0.5 + wallWidth;
     //Start in a random configuration
     real3 vcm = make_real3(0);
-    auto initial =  initLattice(make_real3(boxSize.x, boxSize.y, max_z-min_z), N, fcc);    
-    fori(numberParticlesWall, numberParticlesWall + numberParticlesDPD){
+    auto initial =  initLattice(make_real3(boxSize.x, boxSize.y, max_z-min_z), N, sc);    
+    fori(numberParticlesWall, numberParticlesWall + numberFluidParticles){
       pos.raw()[i] = make_real4(initial[i-numberParticlesWall].x,
 				initial[i-numberParticlesWall].y,
 				initial[i-numberParticlesWall].z+min_z+(max_z-min_z)*0.5,
@@ -189,47 +188,46 @@ int main(int argc, char *argv[]){
       mass.raw()[i] = 1;
     }
     //Remove center of mass velocity
-    vcm /= (real) numberParticlesDPD;
-    fori(numberParticlesWall, numberParticlesWall + numberParticlesDPD){
+    vcm /= (real) numberFluidParticles;
+    fori(numberParticlesWall, numberParticlesWall + numberFluidParticles){
       vel.raw()[i] -= vcm;
     }
   }
 
   auto all_group = make_shared<ParticleGroup>(pd, sys, "All");
   auto Wall_group = make_shared<ParticleGroup>(particle_selector::Type(1), pd, sys, "Wall_particles");
-  auto DPD_group = make_shared<ParticleGroup>(particle_selector::Type(0), pd, sys, "DPD_particles");
-
+  auto Fluid_group = make_shared<ParticleGroup>(particle_selector::Type(0), pd, sys, "Fluid_particles");
   
   using NVT = VerletNVT::GronbechJensen;
   
   NVT::Parameters par;
   par.temperature = temperature;
   par.dt = dt;
-  par.viscosity = gammaDPD;
+  par.viscosity = gammaVerlet;
 
   auto verlet = make_shared<NVT>(pd, all_group, sys, par);
-  real viscosityDPD = 0.17629/0.3 +
-    0.062692*(exp(4.095577*densityDPD)-1) -
-    8.743269e-6*(exp(11.124920*densityDPD-1)) +
-    2.542477e-6*temperature*(exp(14.863984*densityDPD)-1);
+  real viscosityFluid = 0.17629/0.3 +
+    0.062692*(exp(4.095577*fluidDensity)-1) -
+    8.743269e-6*(exp(11.124920*fluidDensity-1)) +
+    2.542477e-6*temperature*(exp(14.863984*fluidDensity)-1);
   {//LJ fluid
     using PairForces = PairForces<Potential::LJ>;
     
     auto pot = make_shared<Potential::LJ>(sys);
 
     Potential::LJ::InputPairParameters par;
-    par.epsilon = 1.0;
+    par.epsilon = epsilonFluid;
     par.shift = false;
 
     par.sigma = 1;
-    par.cutOff = 2.5*par.sigma;
+    par.cutOff = cutOff;
     //Once the InputPairParameters has been filled accordingly for a given pair of types,
     //a potential can be informed like this:
     pot->setPotParameters(0, 0, par);
     pot->setPotParameters(1, 1, par);
     par.epsilon = epsilonWall;
+    par.cutOff = cutOffWall_fluid;
     pot->setPotParameters(0, 1, par);
-
 
     PairForces::Parameters params;
     params.box = box;  //Box to work on
@@ -257,9 +255,9 @@ int main(int argc, char *argv[]){
   }
 
   real wallDensity = numberParticlesWall*wallParticleMass/(box.boxSize.y*box.boxSize.x);
-  sys->log<System::MESSAGE>("viscosity: %f", viscosityDPD);
-  sys->log<System::MESSAGE>("C: %f", viscosityDPD*densityDPD/(2*M_PI*wallOscilationWaveNumber*pow(wallDensity,2)));
-  sys->log<System::MESSAGE>("Penetration length: %f", sqrt(2*viscosityDPD/(2*M_PI*wallOscilationWaveNumber*densityDPD)));
+  sys->log<System::MESSAGE>("viscosity: %f", viscosityFluid);
+  sys->log<System::MESSAGE>("C: %f", viscosityFluid*fluidDensity/(2*M_PI*wallOscilationWaveNumber*pow(wallDensity,2)));
+  sys->log<System::MESSAGE>("Penetration length: %f", sqrt(2*viscosityFluid/(2*M_PI*wallOscilationWaveNumber*fluidDensity)));
 							      
 
   sys->log<System::MESSAGE>("RUNNING!!!");
@@ -278,14 +276,14 @@ int main(int argc, char *argv[]){
       auto vel = pd->getVel(access::location::gpu, access::mode::readwrite);
       auto pos = pd->getPos(access::location::gpu, access::mode::read);
 
-      int N_dpd = DPD_group->getNumberParticles();
+      int N = Fluid_group->getNumberParticles();
       int Nthreads = 512;
-      int Nblocks  = N_dpd/Nthreads+1;
-      reflectVelocity<<<Nblocks, Nthreads>>>(DPD_group->getIndexIterator(access::location::gpu),
+      int Nblocks  = N/Nthreads+1;
+      reflectVelocity<<<Nblocks, Nthreads>>>(Fluid_group->getIndexIterator(access::location::gpu),
 					     pos.raw(),
 					     vel.raw(),
 					     max_z,
-					     N_dpd);
+					     N);
     }
 
     verlet->forwardTime();
@@ -308,14 +306,14 @@ int main(int argc, char *argv[]){
       auto vel = pd->getVel(access::location::gpu, access::mode::readwrite);
       auto pos = pd->getPos(access::location::gpu, access::mode::read);
 
-      int N_dpd = DPD_group->getNumberParticles();
+      int N = Fluid_group->getNumberParticles();
       int Nthreads = 512;
-      int Nblocks  = N_dpd/Nthreads+1;
-      reflectVelocity<<<Nblocks, Nthreads>>>(DPD_group->getIndexIterator(access::location::gpu),
+      int Nblocks  = N/Nthreads+1;
+      reflectVelocity<<<Nblocks, Nthreads>>>(Fluid_group->getIndexIterator(access::location::gpu),
 		      pos.raw(),
 		      vel.raw(),
 		      max_z,
-		      N_dpd);
+		      N);
     }
     verlet->forwardTime();
 
@@ -354,7 +352,7 @@ int main(int argc, char *argv[]){
       fori(0, nbins){
 	real time = j*dt;
 	real z = (boxSize.z*(i/(double)nbins));
-	real kvis = viscosityDPD/(densityDPD);
+	real kvis = viscosityFluid/(fluidDensity);
 	real kappa = sqrt(2*M_PI*wallOscilationWaveNumber/(2*kvis));
 	//std::cerr<<2*M_PI/kappa<<std::endl;
 	real theo = 5*exp(-z*kappa)*cos(2*M_PI*wallOscilationWaveNumber*time- kappa*z);
@@ -384,13 +382,12 @@ int main(int argc, char *argv[]){
 void readParameters(std::string datamain, shared_ptr<System> sys){
   InputFile in(datamain, sys);
   in.getOption("temperature",       InputFile::Required)>>temperature;
-  in.getOption("gammaDPD",          InputFile::Required)>>gammaDPD;
-  in.getOption("intensityDPD",      InputFile::Required)>>intensityDPD;
-  in.getOption("numberParticlesDPD",InputFile::Required)>>numberParticlesDPD;
+  in.getOption("gamma",          InputFile::Required)>>gammaVerlet;
+  in.getOption("numberFluidParticles",InputFile::Required)>>numberFluidParticles;
   in.getOption("boxSize",           InputFile::Required)>>boxSize.x>>boxSize.y>>boxSize.z;
   in.getOption("topWall_z",         InputFile::Required)>>topWall_z;
   in.getOption("cutOffWall_fluid",  InputFile::Required)>>cutOffWall_fluid;
-  in.getOption("cutOffDPD",         InputFile::Required)>>cutOffDPD;
+  in.getOption("cutOff",         InputFile::Required)>>cutOff;
   in.getOption("wallBondsFile",     InputFile::Required)>>wallBondsFile;
   in.getOption("wallBondsFileFP",   InputFile::Required)>>wallBondsFileFP;
   in.getOption("wallParticleMass",  InputFile::Required)>>wallParticleMass;
@@ -403,5 +400,6 @@ void readParameters(std::string datamain, shared_ptr<System> sys){
   in.getOption("wallOscilationAmplitude",InputFile::Required)>>wallOscilationAmplitude;
   in.getOption("wallOscilationWaveNumber",InputFile::Required)>>wallOscilationWaveNumber;
   in.getOption("epsilonWall",InputFile::Required)>>epsilonWall;
+  in.getOption("epsilonFluid",InputFile::Required)>>epsilonFluid;
   in.getOption("nbinsHisto", InputFile::Optional)>>nbinsHisto;
 }
