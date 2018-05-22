@@ -2,10 +2,10 @@
 temperature 1.0
 
 #VerletNVT dissipation rate ( viscosity)
-gamma 1.0
+gamma 0.1
 
 #Number of fluid particles
-numberFluidParticles  80000
+numberFluidParticles  70000
 
 boxSize 40 40 55
 
@@ -17,7 +17,7 @@ topWall_z 50
 cutOffWall_fluid    2.5
 
 #wall-wall and fluid-fluid cut off
-cutOff           2.5 #1.12246204830937
+cutOff           1.12246204830937
 
 
 
@@ -35,21 +35,21 @@ wallParticleMass       100
 #A
 wallOscilationAmplitude 5000
 #w
-wallOscilationWaveNumber 0.0075
+wallOscilationWaveNumber 0.0005
 
-#LJ epsilon between wall and fluid particles
+#LJ epsilon between wall-wall and wall-fluid pairs
 epsilonWall 50
-#LJ epsilon between wall-wall and fluid-fluid pairs
-epsilonFluid 1
+#LJ epsilon between fluid-fluid pairs
+epsilonFluid 1.2
 
 #During the relaxation the wall does not oscilate
 relaxSteps 1000
 
 numberSteps 20000000
 
-printSteps 2000
+printSteps 5000
 
-dt 0.001
+dt 0.005
 
 outputName test
 

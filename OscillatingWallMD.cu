@@ -224,6 +224,7 @@ int main(int argc, char *argv[]){
     //Once the InputPairParameters has been filled accordingly for a given pair of types,
     //a potential can be informed like this:
     pot->setPotParameters(0, 0, par);
+    par.epsilon = epsilonWall;
     pot->setPotParameters(1, 1, par);
     par.epsilon = epsilonWall;
     par.cutOff = cutOffWall_fluid;

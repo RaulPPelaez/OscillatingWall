@@ -7,7 +7,7 @@ gammaDPD 10
 gammaWall_Fluid 100
 
 #Strength of the conservative DPD force (aij), negative means set aij to get the compressibility of water (kappa ~ 16)
-#intensityDPD 25.0
+#intensityDPD 1
 intensityDPD -1
 
 #Number of fluid particles
@@ -26,33 +26,49 @@ cutOffDPD           2
 
 
 #Files to read wall 
-wallCoordinatesFile  wall.init
+wallCoordinatesFile  init.pos
 #p-p bonds
-wallBondsFile        wall.bonds
+wallBondsFile        init.2bonds
 #Bonds fixing to a certain height
-wallBondsFileFP      wall.bondsFP
+wallBondsFileFP      init.bondsFP
+wallAngularBondsFile init.3bonds
 #Mass of a wall particle
 wallParticleMass       100
 
-#External force on the wall = A*sin(2*pi*w*t)
+#External force/velocity on the wall = A*sin(2*pi*w*t)
 #A
-wallOscilationAmplitude 10000
-#w
-wallOscilationWaveNumber 0.0075
+wallOscilationAmplitude 1
+#w, ignored in ringDown mode
+wallOscilationWaveNumber 0.075
 
-#LJ epsilon
+#LJ epsilon between wall-wall and wall-fluid particles
 epsilonWall 2
 
-#During the relaxation the wall does not oscilate
-relaxSteps 1000
+#During a ring down sim. the wall experiments a force of wallOscilationAmplitude in x which is released after relaxSteps
+#If not a ring down the wall remains at its eq position during the relaxSteps
+relaxSteps 500
 
 numberSteps 20000000
 
-printSteps  1000
+printSteps  100
 
-dt 0.005
+dt 0.002
 
 outputName test
 
+
 #Number of bins for the velocity profile histogram
 nbinsHisto 50
+
+
+#In a ring down simulation the wall experiments a force in the x direction since the beggining of the simulation, and it is released after the relaxation steps
+#ringDown
+#If present the velocity of the wall is forced to be wallOscilationAmplitude*sin(wallOscilationWavenumber*t) instead of the applying a force.
+imposeVelocity
+
+printWallForces
+printWallForces
+#printFluid
+#printVelocities
+#printVelocities
+printWallForces

@@ -30,6 +30,7 @@ The wall will start to oscilate only after the relaxation steps.
 #include"Interactor/PairForces.cuh"
 #include"Interactor/ExternalForces.cuh"
 #include"Interactor/BondedForces.cuh"
+#include"Interactor/AngularBondedForces.cuh"
 #include"Interactor/Potential/Potential.cuh"
 #include"Interactor/Potential/DPD.cuh"
 #include"utils/InitialConditions.cuh"
@@ -39,15 +40,16 @@ The wall will start to oscilate only after the relaxation steps.
 double epsilonWall = 5.0;
 
 using namespace uammd;
-//This external force takes care of making the wall oscilate
+//This external force takes care of making the wall oscilate (Also applies a constant force in the x direction if w=0)
 struct WallOscilation: public ParameterUpdatable{
   real w;
   real A;
   real t;
   real relaxTime = -1;
   WallOscilation(real w, real A):w(w),A(A){t=0;}
-  __device__ real3 force(const real4 &pos){    
-    real3 f = make_real3(A*sinf(w*t),0, 0);
+  __host__ __device__ real3 force(const real4 &pos){
+    
+    real3 f = make_real3(A*(w==real(0.0)?real(1.0):sinf(w*t)),0, 0);
     return f;
   }
   std::tuple<const real4 *> getArrays(ParticleData *pd){
@@ -61,7 +63,6 @@ struct WallOscilation: public ParameterUpdatable{
   }
     
 };
-
 
 //This kernel reflects the velocity of the particles above the top wall.
 template<class GroupIndexIterator>
@@ -194,7 +195,6 @@ public:
 struct WallDissipation{
   real gammaDPD, gammaWall_Fluid;
   inline __device__ real dissipativeStrength(int i, int j, const real4 &pi, const real4 &pj, ...) const{
-    
     bool sameType = int(pi.w)==int(pj.w);
     bool wallwall = int(pi.w)==1;
     return (gammaDPD*sameType + gammaWall_Fluid*(!sameType))*(!wallwall);
@@ -205,13 +205,43 @@ struct WallDissipation{
 struct HarmonicZ: public BondedType::Harmonic{
   real offset;
   HarmonicZ(real offset): offset(offset){}
-  inline __device__ real3 force(int i, int j, const real3 &r12, const BondInfo &bi){
+  inline __device__ real3 force(int i, int j, const real3 &r12, const BondInfo &bi){    
     real3 r12z = make_real3(r12.x, r12.y, r12.z-offset);
+    return Harmonic::force(i, j, r12z, bi);
+  }    
+};
+//Confines only z direction
+struct HarmonicZPure: public BondedType::Harmonic{
+  real offset;
+  HarmonicZPure(real offset): offset(offset){}
+  inline __device__ real3 force(int i, int j, const real3 &r12, const BondInfo &bi){    
+    real3 r12z = make_real3(0, 0, r12.z-offset);
     return Harmonic::force(i, j, r12z, bi);
   }    
 };
 
 using namespace std;
+
+template<class GroupIndexIterator>
+__global__ void imposeWallVelocityKernel(GroupIndexIterator groupIndex, real3 *vel, real w, real A, real t, int N){
+  int id = blockIdx.x*blockDim.x + threadIdx.x;
+  if(id>=N) return;
+  int index = groupIndex[id];
+  vel[index].x = A*sinf(w*t);
+}
+void imposeWallVelocity(shared_ptr<ParticleGroup> wall_group, shared_ptr<ParticleData> pd, real w, real A, real t){
+      auto vel = pd->getVel(access::location::gpu, access::mode::readwrite);
+      int N_wall = wall_group->getNumberParticles();
+      int Nthreads = 64;
+      int Nblocks  = N_wall/Nthreads+1;
+      imposeWallVelocityKernel<<<Nblocks, Nthreads>>>(wall_group->getIndexIterator(access::location::gpu),
+						      vel.raw(),
+						      2*M_PI*w,
+						      A,
+						      t,
+						      N_wall);
+}
+
 
 //Parameters
 int numberParticlesDPD;
@@ -234,23 +264,34 @@ real dt;
 
 int nbinsHisto = 100;
 
-std::string wallCoordinatesFile, wallBondsFile, wallBondsFileFP;
+std::string wallCoordinatesFile, wallBondsFile, wallBondsFileFP, wallAngularBondsFile;
 
 std::string outputName;
 
+bool printWallForces = false, printVelocities = false, printFluid = false;
+
+//Ring down experiment, the wall starts with a force in the x direction, and it is released after the relaxation
+bool ringDown = false;
+//impose a velocity in the wall instead of a force
+bool imposeVelocity = false;
 
 void readParameters(std::string datamain, shared_ptr<System> sys);
 
 int main(int argc, char *argv[]){
   auto sys = make_shared<System>(argc, argv);
   readParameters("data.main.dpd", sys);
-  
-  int numberParticlesWall;
-  ifstream inWall(wallCoordinatesFile);
-  inWall>>numberParticlesWall;
 
-  int N = numberParticlesDPD + numberParticlesWall;  
+  int numberParticlesToRead;
+  int numberParticlesWall;
+
+  ifstream inWall(wallCoordinatesFile);
   
+  inWall>>numberParticlesToRead;
+
+  // int numberParticlesObjects = numberStrands*particlesPerStrand;  
+  // int N = numberParticlesDPD + numberParticlesWall + numberParticlesObjects;
+
+  int N = numberParticlesDPD + numberParticlesToRead;
   ullint seed = 0xf31337Bada55D00dULL^time(NULL);
   sys->rng().setSeed(seed);
 
@@ -260,75 +301,62 @@ int main(int argc, char *argv[]){
   Box box(boxSize);//({40, 40, 90});
   real densityDPD = numberParticlesDPD/box.getVolume();
 
-  real max_z = topWall_z-boxSize.z/2;//box.boxSize.z/2-2*cutOff;
-  real min_z;
-  real zOffsetFixedPoint; //Needed due to the wall being moved to the bottom of the box
-  //Initial positions
+  real max_z = topWall_z-boxSize.z/2;
+  //Initial configuration
   {
-    //Ask pd for a property like so:
     auto pos = pd->getPos(access::location::cpu, access::mode::write);
-    auto vel = pd->getVel(access::location::cpu, access::mode::write);
-    auto mass = pd->getMass(access::location::cpu, access::mode::write);    
-    real mean_wall_z = 0;
-    real wallMinz=10000, wallMaxz=-10000;
+    auto mass = pd->getMass(access::location::cpu, access::mode::write);
 
-    fori(0, numberParticlesWall){
-      inWall>>pos.raw()[i].x>>pos.raw()[i].y>>pos.raw()[i].z>>pos.raw()[i].w;
-      real z = pos.raw()[i].z;
-      mean_wall_z += z;
-
-      wallMinz = min(z, wallMinz);
-      wallMaxz = max(z, wallMaxz);
-      
-      pos.raw()[i].w = 1;
-      mass.raw()[i] = wallParticleMass;
-      vel.raw()[i] = make_real3(sys->rng().gaussian(0, 0.01),
-				sys->rng().gaussian(0, 0.01),
-				sys->rng().gaussian(0, 0.01));
+    real wallmaxz = -100000;
+    real wallminz = 10000;
+    real4 * p = pos.raw();
+    fori(0,numberParticlesToRead){
+      inWall>>p[i].x>>p[i].y>>p[i].z>>p[i].w;
+      int type = int(p[i].w);
+      if(type == 1){
+	mass.raw()[i] = wallParticleMass;
+	wallmaxz = std::max(p[i].z, wallmaxz);
+	wallminz = std::min(p[i].z, wallminz);
+      }
+      else mass.raw()[i] = 1;
     }
-
-    wallWidth = wallMaxz - wallMinz;
-    min_z = -10000000;
-    mean_wall_z /= numberParticlesWall;
-    
-    fori(0, numberParticlesWall){
-      pos.raw()[i].z += -mean_wall_z -box.boxSize.z*0.5 + wallWidth;      
-      min_z = max(pos.raw()[i].z, min_z);
-    }
-    
-    min_z += pow(2, 1/6.);
-
-    zOffsetFixedPoint = -mean_wall_z -box.boxSize.z*0.5 + wallWidth;
-    //Start in a random configuration
-    real3 vcm = make_real3(0);
-    fori(numberParticlesWall, numberParticlesWall + numberParticlesDPD){
-      pos.raw()[i] = make_real4(
-				sys->rng().uniform3(-box.boxSize.x*0.5,
-						    box.boxSize.x*0.5),
-				0);
-      
-      pos.raw()[i].z = sys->rng().uniform(min_z, max_z);
-      
-      pos.raw()[i].w = 0;
-      
-      vel.raw()[i] = make_real3(sys->rng().gaussian(0, 0.01),
-				sys->rng().gaussian(0, 0.01),
-				sys->rng().gaussian(0, 0.01));
-
-      vcm += vel.raw()[i];
+    wallWidth = wallmaxz - wallminz;
+    real min_z = wallmaxz+pow(2,1/6.);//cutOffWall_fluid;
+    bool checkOverlaps = false;
+    fori(numberParticlesToRead, N){
+      p[i] = make_real4(sys->rng().uniform3(-box.boxSize.x*0.5,
+					    box.boxSize.x*0.5),
+			0);
+      p[i].z = sys->rng().uniform(min_z, max_z);
+      if(checkOverlaps){
+	forj(0, numberParticlesToRead){
+	  real3 rij = box.apply_pbc(make_real3(p[i]-p[j]));
+	  if(dot(rij, rij) < cutOffWall_fluid*cutOffWall_fluid){
+	    i--;
+	    break;
+	  }
+	}
+      }
       mass.raw()[i] = 1;
     }
-    //Remove center of mass velocity
-    vcm /= (real) numberParticlesDPD;
-    fori(numberParticlesWall, numberParticlesWall + numberParticlesDPD){
-      vel.raw()[i] -= vcm;
+    auto vel = pd->getVel(access::location::cpu, access::mode::write);
+    double3 vcm = make_double3(0);
+    fori(0,N){
+      vel.raw()[i] = make_real3(sys->rng().gaussian(0, 0.01),
+				sys->rng().gaussian(0, 0.01),
+				sys->rng().gaussian(0, 0.01));
+      vcm += make_double3(vel.raw()[i]);
     }
+    vcm /= N;
+    fori(0,N) vel.raw()[i] -= make_real3(vcm);    
   }
-
+  
   auto all_group = make_shared<ParticleGroup>(pd, sys, "All");
   auto Wall_group = make_shared<ParticleGroup>(particle_selector::Type(1), pd, sys, "Wall_particles");
+  numberParticlesWall = Wall_group->getNumberParticles();
   auto DPD_group = make_shared<ParticleGroup>(particle_selector::Type(0), pd, sys, "DPD_particles");
-
+  auto Objects_group = make_shared<ParticleGroup>(particle_selector::Type(2), pd, sys, "Object_particles");
+  int numberParticlesObjects = Objects_group->getNumberParticles();
   
   using NVE = VerletNVE;
   
@@ -359,6 +387,7 @@ int main(int argc, char *argv[]){
     dpd_params.dt = par.dt;
     
     sys->log<System::MESSAGE>("DPD density: %f", densityDPD);
+    
     viscosityDPD = 45.0/(4.0*M_PI)*temperature/(gammaDPD*pow(cutOffDPD,3)) +
       (2.0*M_PI)/(1575.0)*pow(densityDPD,2)*gammaDPD*pow(cutOffDPD,5);
     sys->log<System::MESSAGE>("DPD viscosity: %f", viscosityDPD);
@@ -381,16 +410,57 @@ int main(int argc, char *argv[]){
 						  BondedType::HarmonicPBC(box));
     verlet->addInteractor(bondedforces);
   }
-  {//Wall bonds
+  
+  if(!imposeVelocity){//Wall Fixed point bonds
     using BondedForces = BondedForces<HarmonicZ>;
     //You can use Elastic_Network_Model.cpp to generate some example bonds for the starting configuration.
     BondedForces::Parameters params;
     params.file = wallBondsFileFP.c_str();  //Box to work on
     auto bondedforces = make_shared<BondedForces>(pd, sys, params,
-						  HarmonicZ(zOffsetFixedPoint));
+						  HarmonicZ(0));
     verlet->addInteractor(bondedforces);
   }
+  else{
+    using BondedForces = BondedForces<HarmonicZPure>;
+    //You can use Elastic_Network_Model.cpp to generate some example bonds for the starting configuration.
+    BondedForces::Parameters params;
+    params.file = wallBondsFileFP.c_str();  //Box to work on
+    auto bondedforces = make_shared<BondedForces>(pd, sys, params,
+						  HarmonicZPure(0));
+    verlet->addInteractor(bondedforces);
 
+  }
+
+  {//Object Angular bonds
+    //You can use Elastic_Network_Model.cpp to generate some example bonds for the starting configuration.
+    AngularBondedForces::Parameters params;
+    params.readFile = wallAngularBondsFile.c_str();  //Box to work on
+    params.box = box;
+    auto bondedforces = make_shared<AngularBondedForces>(pd, sys, params);
+    verlet->addInteractor(bondedforces);
+  }
+  {
+    using PairForces = PairForces<Potential::LJ>;
+    PairForces::Parameters params;
+    params.box = box;
+    auto pot = std::make_shared<Potential::LJ>(sys);
+    {
+      //Each Potential describes the pair interactions with certain parameters.
+      //The needed ones are in InputPairParameters inside each potential, in this case:
+      Potential::LJ::InputPairParameters par;
+      par.epsilon = epsilonWall;
+      par.shift = false;
+
+      par.sigma = 1;
+      par.cutOff = 2.5*par.sigma;
+      //Once the InputPairParameters has been filled accordingly for a given pair of types,
+      //a potential can be informed like this:
+      pot->setPotParameters(2, 2, par);
+    }
+    auto pf = std::make_shared<PairForces>(pd, Objects_group, sys, params, pot);    
+    verlet->addInteractor(pf);
+
+  }
   {//Wall-Wall and Wall-fluid
     WallFluidForces::Parameters par;
     par.box = box;
@@ -412,11 +482,25 @@ int main(int argc, char *argv[]){
   pd->sortParticles();
 
   ofstream posOut(outputName+".pos");
-  ofstream velOut(outputName+".vel");
+  ofstream velOut;  if(printVelocities) velOut.open(outputName+".vel");
+  ofstream forceOut; if(printWallForces) forceOut.open(outputName+".wallForces");
   ofstream histoOut(outputName+".histo");
 
   Timer tim;
   tim.tic();
+  //Wall Oscilation
+  real OscilationAmplitude = 0;
+  real w = 0;
+  if(ringDown){
+    OscilationAmplitude = wallOscilationAmplitude;
+  }
+  auto wallOscilationForce = make_shared<WallOscilation>(w,OscilationAmplitude);
+  {
+    auto wallOscilation = make_shared<ExternalForces<WallOscilation>>(pd, Wall_group, sys,
+								      wallOscilationForce);
+    if(!imposeVelocity)
+      verlet->addInteractor(wallOscilation);
+  }
   //Thermalization
   forj(0,relaxSteps){
     {
@@ -435,16 +519,18 @@ int main(int argc, char *argv[]){
 
     verlet->forwardTime();
   }
-  
+  sys->log<System::MESSAGE>("RUNNING!!!");
   cudaDeviceSynchronize();
-  //Wall Oscilation
-  real A = wallOscilationAmplitude;
-  real w = 2*M_PI*wallOscilationWaveNumber;
-  auto wallOscilation = make_shared<ExternalForces<WallOscilation>>(pd, Wall_group, sys,
-								    make_shared<WallOscilation>(w,A));
-  verlet->addInteractor(wallOscilation);
-  
-
+  //If this is a force oscillation simulation activate oscilation
+  if(!ringDown && ! imposeVelocity){
+    w = 2*M_PI*wallOscilationWaveNumber;
+    wallOscilationForce->w = w;
+    wallOscilationForce->A = wallOscilationAmplitude;
+  }
+  //if this is a ringDown sim. deactivate force.
+  else if(ringDown){
+    wallOscilationForce->A = 0;
+  }
   //Run the simulation
   forj(0,numberSteps){
     //This will instruct the integrator to take the simulation to the next time step,
@@ -461,6 +547,9 @@ int main(int argc, char *argv[]){
 		      vel.raw(),
 		      max_z,
 		      N_dpd);
+    }
+    if(imposeVelocity){
+      imposeWallVelocity(Wall_group, pd, wallOscilationWaveNumber, wallOscilationAmplitude, j*dt);
     }
     verlet->forwardTime();
 
@@ -483,11 +572,12 @@ int main(int argc, char *argv[]){
 	p = make_real3(pc); //box.apply_pbc(make_real3(pc));
 	auto p_pbc = box.apply_pbc(make_real3(pc));
 	int type = pc.w;
+	if(type==0 && !printFluid) continue;
 	float radius=0.5;
 	if(type==0){ radius = 0.2; type=5;}
-	
+	if(type==2){ type = 6; }	
 	posOut<<p<<" "<<radius<<" "<<type<<"\n";
-	velOut<<v<<"\n";
+	if(printVelocities) velOut<<v<<"\n";
 
 	real z = p_pbc.z;
 
@@ -495,6 +585,18 @@ int main(int argc, char *argv[]){
 	counter[bin]++;
 	histogram[bin] += v.x;
       }
+      if(printWallForces){
+	auto force = pd->getForce(access::location::cpu, access::mode::read);
+	auto wallParticlesIndices = Wall_group->getIndexIterator(access::location::cpu);
+	real3 totalForce = make_real3(0);
+	fori(0, Wall_group->getNumberParticles()){
+	  totalForce += make_real3(force.raw()[wallParticlesIndices[i]]);// + wallOscilationForce->force(pos.raw()[wallParticlesIndices[i]]);
+	}
+
+	forceOut<<totalForce<<endl;
+	
+      }
+      
       histoOut<<""<<endl;
       fori(0, nbins){
 	real time = j*dt;
@@ -507,7 +609,9 @@ int main(int argc, char *argv[]){
 	  histoOut<<z<<" "<<histogram[i]/counter[i]<<" "<<theo<<"\n";
       }
       posOut<<flush;
-      velOut<<flush;
+      
+      if(printVelocities) velOut<<flush;
+      if(printWallForces) forceOut<<flush;
       histoOut<<flush;
     }    
     //Sort the particles every few steps
@@ -539,7 +643,9 @@ void readParameters(std::string datamain, shared_ptr<System> sys){
   in.getOption("cutOffDPD",         InputFile::Required)>>cutOffDPD;
   in.getOption("wallBondsFile",     InputFile::Required)>>wallBondsFile;
   in.getOption("wallBondsFileFP",   InputFile::Required)>>wallBondsFileFP;
+  in.getOption("wallAngularBondsFile",InputFile::Required)>>wallAngularBondsFile;
   in.getOption("wallParticleMass",  InputFile::Required)>>wallParticleMass;
+
   in.getOption("relaxSteps",        InputFile::Required)>>relaxSteps;
   in.getOption("numberSteps",       InputFile::Required)>>numberSteps;
   in.getOption("printSteps",        InputFile::Required)>>printSteps;
@@ -548,6 +654,21 @@ void readParameters(std::string datamain, shared_ptr<System> sys){
   in.getOption("wallCoordinatesFile",InputFile::Required)>>wallCoordinatesFile;
   in.getOption("wallOscilationAmplitude",InputFile::Required)>>wallOscilationAmplitude;
   in.getOption("wallOscilationWaveNumber",InputFile::Required)>>wallOscilationWaveNumber;
-  in.getOption("epsilonWall",InputFile::Required)>>epsilonWall;
   in.getOption("nbinsHisto", InputFile::Optional)>>nbinsHisto;
+  
+  
+  printVelocities = bool(in.getOption("printVelocities",InputFile::Optional));
+  printWallForces = bool(in.getOption("printWallForces",InputFile::Optional));
+  printFluid = bool(in.getOption("printFluid",InputFile::Optional));
+  ringDown = bool(in.getOption("ringDown",InputFile::Optional));
+  imposeVelocity = bool(in.getOption("imposeVelocity",InputFile::Optional));
+
+  if(ringDown && imposeVelocity){
+    sys->log<System::CRITICAL>("You cannot impose velocity in a ringdown simulation!");
+  }
+  if(ringDown)
+    sys->log<System::MESSAGE>("ringDown mode!");
+  if(imposeVelocity)
+    sys->log<System::MESSAGE>("imposeVelocity mode!");
+    
 }
