@@ -675,6 +675,7 @@ int main(int argc, char *argv[]){
 void readParameters(std::string datamain, shared_ptr<System> sys){
   InputFile in(datamain, sys);
   in.getOption("temperature",       InputFile::Required)>>temperature;
+  in.getOption("epsilonWall",       InputFile::Required)>>epsilonWall;
   in.getOption("gammaDPD",          InputFile::Required)>>gammaDPD;
   in.getOption("gammaWall_Fluid",   InputFile::Required)>>gammaWall_Fluid;
   in.getOption("intensityDPD",      InputFile::Required)>>intensityDPD;
