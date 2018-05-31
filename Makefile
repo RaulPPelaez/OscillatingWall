@@ -10,7 +10,7 @@ DEBUG= -O3
 LOG_LEVEL=5
 
 ifeq ($(ARCH),)
-GENCODE_FLAGS:=$(shell printf '\#include<cstdio>\n int main(){int nD;cudaGetDeviceCount(&nD);for(int i=0;i<nD;i++){cudaDeviceProp dp;cudaGetDeviceProperties(&dp, i);int cp=dp.major*10+dp.minor;std::printf("%%d\\n",cp);} return 0;}' | nvcc -Wno-deprecated-gpu-targets -x cu - --run | sort -g -k1 | uniq | awk '{print "-gencode arch=compute_"$$1",code=sm_"$$1}')
+GENCODE_FLAGS:=$(shell printf '\#include<cstdio>\n int main(){int nD;cudaGetDeviceCount(&nD);for(int i=0;i<nD;i++){cudaDeviceProp dp;cudaGetDeviceProperties(&dp, i);std::printf("%%d\\n", dp.major*10+dp.minor);} return 0;}' | nvcc -Wno-deprecated-gpu-targets -x cu - --run | sort -g -k1 | uniq | awk '{print "-gencode arch=compute_"$$1",code=sm_"$$1}')
 else
 GENCODE_FLAGS:=-gencode arch=compute_$(ARCH),code=sm_$(ARCH)
 endif
@@ -26,7 +26,6 @@ BASIC_LINE:= /usr/local/cuda-$(CUDA_VER)/bin/nvcc -L/usr/local/cuda-$(CUDA_VER)/
 all:  dpd md
 
 dpd:
-	echo $(GENCODE_FLAGS)
 	@if ! ls -d uammd >/dev/null 2>&1; \
 	then \
 	git clone https://github.com/RaulPPelaez/uammd; \

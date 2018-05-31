@@ -21,7 +21,6 @@ topWall_z 50
 #Cut off between wall-wall and wall-fluid LJ interaction
 cutOffWall_fluid    2.5
 
-#cutOffDPD           1.12246204830937
 cutOffDPD           2
 
 
@@ -33,42 +32,50 @@ wallBondsFile        init.2bonds
 wallBondsFileFP      init.bondsFP
 wallAngularBondsFile init.3bonds
 #Mass of a wall particle
-wallParticleMass       100
+wallParticleMass       50
 
-#External force/velocity on the wall = A*sin(2*pi*w*t)
+#Wall will be attached to Z only when activated
+#freeWall
+
+#External force/velocity on the wall = A*sin(2*pi*w*t).
 #A
-wallOscilationAmplitude 1
+wallOscilationAmplitude 0.5
 #w, ignored in ringDown mode
-wallOscilationWaveNumber 0.075
+wallOscilationWaveNumber 0.01
 
 #LJ epsilon between wall-wall and wall-fluid particles
 epsilonWall 2
 
 #During a ring down sim. the wall experiments a force of wallOscilationAmplitude in x which is released after relaxSteps
 #If not a ring down the wall remains at its eq position during the relaxSteps
-relaxSteps 500
+#relaxSteps 10000
+relaxSteps 10000
 
 numberSteps 20000000
 
-printSteps  100
+printSteps  5000
 
-dt 0.002
+dt 0.001
 
 outputName test
-
 
 #Number of bins for the velocity profile histogram
 nbinsHisto 50
 
 
+#-----------Simulation mode-------------#
+#Choose only one, if none is present, wall forcing is assumed
+
 #In a ring down simulation the wall experiments a force in the x direction since the beggining of the simulation, and it is released after the relaxation steps
 #ringDown
+
 #If present the velocity of the wall is forced to be wallOscilationAmplitude*sin(wallOscilationWavenumber*t) instead of the applying a force.
 imposeVelocity
+#---------------------------------------#
 
-printWallForces
-printWallForces
+#Print position of the fluid particles along the wall/strands
 #printFluid
+#Print instantaneous velocities
 #printVelocities
-#printVelocities
+#Print forces acting on the wall
 printWallForces
