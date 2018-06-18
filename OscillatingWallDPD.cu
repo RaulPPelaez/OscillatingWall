@@ -200,8 +200,10 @@ public:
 
 //DPD dissipation between wall and fluid particles
 struct WallDissipation{
+  
   real gammaDPD, gammaWall_Fluid;
-  inline __device__ real dissipativeStrength(int i, int j, const real4 &pi, const real4 &pj, ...) const{
+  template<class ...T> //I dont care about the rest of the parameters, if any
+  inline __device__ real dissipativeStrength(int i, int j, const real4 &pi, const real4 &pj, T...) const{
     bool sameType = int(pi.w)==int(pj.w);
     bool wallwall = int(pi.w)==1;
     return (gammaDPD*sameType + gammaWall_Fluid*(!sameType))*(!wallwall);
