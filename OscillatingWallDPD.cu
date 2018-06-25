@@ -232,20 +232,23 @@ struct HarmonicZPure: public BondedType::Harmonic{
 using namespace std;
 
 template<class GroupIndexIterator>
-__global__ void imposeWallVelocityKernel(GroupIndexIterator groupIndex, real3 *vel, real freq, real A, real t, int N){
+__global__ void imposeWallVelocityKernel(GroupIndexIterator groupIndex, real3 *vel, real4 *force, real freq, real A, real t, int N){
   int id = blockIdx.x*blockDim.x + threadIdx.x;
   if(id>=N) return;
   int index = groupIndex[id];
   vel[index].x = A*cosf(freq*t);
+  force[index].x = 0;
 }
 void imposeWallVelocity(shared_ptr<ParticleGroup> wall_group, shared_ptr<ParticleData> pd, real w, real A, real t){
   
       auto vel = pd->getVel(access::location::gpu, access::mode::readwrite);
+      auto force = pd->getForce(access::location::gpu, access::mode::readwrite);
       int N_wall = wall_group->getNumberParticles();
       int Nthreads = 64;
       int Nblocks  = N_wall/Nthreads+1;
       imposeWallVelocityKernel<<<Nblocks, Nthreads>>>(wall_group->getIndexIterator(access::location::gpu),
 						      vel.raw(),
+						      force.raw(),
 						      2*M_PI*w,
 						      A,
 						      t,
