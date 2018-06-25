@@ -37,7 +37,8 @@ wallParticleMass       50
 #Wall will be attached to Z only when activated
 #freeWall
 
-#External force/velocity on the wall = A*sin(2*pi*w*t).
+#External force on the wall = A*sin(2*pi*w*t).
+#In imposeVelocity mode v_wall = A*cos(2*pi*w*t).
 #A
 wallOscilationAmplitude 0.5
 #w, ignored in ringDown mode
@@ -69,7 +70,7 @@ nbinsHisto 50
 #In a ring down simulation the wall experiments a force in the x direction since the beggining of the simulation, and it is released after the relaxation steps
 #ringDown
 
-#If present the velocity of the wall is forced to be wallOscilationAmplitude*sin(wallOscilationWavenumber*t) instead of the applying a force.
+#If present the velocity of the wall is forced to be wallOscilationAmplitude*cos(2*pi*wallOscilationWavenumber*t) instead of the applying a force.
 imposeVelocity
 #---------------------------------------#
 
