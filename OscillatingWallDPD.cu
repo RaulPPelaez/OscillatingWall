@@ -422,7 +422,7 @@ int main(int argc, char *argv[]){
     verlet->addInteractor(bondedforces);
   }
 
-  if(!imposeVelocity || !freeWall){//Wall Fixed point bonds
+  if(!imposeVelocity && !freeWall){//Wall Fixed point bonds
     using BondedForces = BondedForces<HarmonicZ>;
     //You can use Elastic_Network_Model.cpp to generate some example bonds for the starting configuration.
     BondedForces::Parameters params;
